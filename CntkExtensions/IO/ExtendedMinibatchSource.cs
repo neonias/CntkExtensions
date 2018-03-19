@@ -9,49 +9,48 @@ namespace CntkExtensions.IO
     public class ExtendedMinibatchSource
     {
         private readonly IDeserializer _deserializer;
-        private readonly Dictionary<string, StreamInformation> _streamInfos;
-        private int _remainingLoadedSamples;
-        private Dictionary<StreamInformation, Queue<float[]>> _loadedSamples;
-        private int _numberOfChunks;
+        private readonly Dictionary<StreamInformation, Queue<float[]>> _loadedSamples;
         private int[] _chunksRandomOrder;
-        private int _currentChunkId;
-        private bool _randomize;
-        private bool _repeatInfinitely;
+        private int _currentChunkIdx;
+        private readonly int _numberOfChunks;
+        private readonly bool _randomize;
+        private readonly bool _repeatInfinitely;
 
         public ExtendedMinibatchSource(IDeserializer deserializer, bool randomize = true, bool repeatInfinitely = false)
         {
-            _deserializer = deserializer;
-            _streamInfos = _deserializer.StreamInfos;
-            _numberOfChunks = _deserializer.NumChunks;
-            _chunksRandomOrder = GenerateRandomPermutation(_numberOfChunks);
-            _currentChunkId = 0;
-
-            _remainingLoadedSamples = 0;
-            _loadedSamples = new Dictionary<StreamInformation, Queue<float[]>>(_streamInfos.Count);
-
             _randomize = randomize;
             _repeatInfinitely = repeatInfinitely;
+            _deserializer = deserializer;
+            _numberOfChunks = _deserializer.NumChunks;
+            _loadedSamples = new Dictionary<StreamInformation, Queue<float[]>>(StreamInfos.Count);
+
+            InitializeNextEpoch();
         }
 
         public UnorderedMapStreamInformationMinibatchData GetNextMinibatch(uint minibatchSizeInSamples,
             DeviceDescriptor device)
         {
+            if(!HasNextMinibatch())
+                throw new NoMoreMinibatchesException();
+
             LoadNextSamplesIfNeeded(minibatchSizeInSamples);
 
             // UnorderedMap <- MinibatchData <- Value <- IEnumerable<float[]>
             var minibatch = new UnorderedMapStreamInformationMinibatchData();
-
-            foreach (var streamInfo in _streamInfos.Values)
+            var realMinibatchSize = (uint) Math.Min(minibatchSizeInSamples, RemainingLoadedSamples);
+ 
+            foreach (var streamInfo in StreamInfos.Values)
             {
-                var samples = new List<float[]>((int)minibatchSizeInSamples);
-                for (var i = 0; i < minibatchSizeInSamples; ++i)
+                var streamVectorSize = streamInfo.m_sampleLayout.TotalSize;
+                var minibatchArray = new float[realMinibatchSize * streamVectorSize];
+                for (var i = 0; i < realMinibatchSize; ++i)
                 {
                     var sample = _loadedSamples[streamInfo].Dequeue();
-                    samples.Add(sample);
+                    sample.CopyTo(minibatchArray, streamVectorSize * i);
                 }
 
-                var minibatchValue = Value.CreateBatchOfSequences<float>(streamInfo.m_sampleLayout, samples, device);
-                var minibatchData = new MinibatchData(minibatchValue, (uint) samples.Count);
+                var minibatchValue = Value.CreateBatch(streamInfo.m_sampleLayout, minibatchArray, device);
+                var minibatchData = new MinibatchData(minibatchValue, realMinibatchSize);
                 minibatch.Add(streamInfo, minibatchData);
             }
 
@@ -60,47 +59,74 @@ namespace CntkExtensions.IO
 
         public bool HasNextMinibatch()
         {
-            return _currentChunkId != -1;
+            return HasNextChunk();
+        }
+
+        public Dictionary<string, StreamInformation> StreamInfos => _deserializer.StreamInfos;
+
+        private int RemainingLoadedSamples => _loadedSamples.First().Value.Count;
+
+        private bool HasNextChunk()
+        {
+            return _currentChunkIdx != -1;
+        }
+
+        private void InitializeNextEpoch(bool clearLoadedSamples = true)
+        {
+            _chunksRandomOrder = GenerateRandomPermutation(_numberOfChunks);
+            _currentChunkIdx = 0;
+
+            if (clearLoadedSamples)
+            {
+                _loadedSamples.Clear();
+                foreach (var streamInfo in StreamInfos)
+                    _loadedSamples.Add(streamInfo.Value, new Queue<float[]>());
+            }
         }
 
         private void LoadNextSamplesIfNeeded(uint requiredNumberOfSamples)
         {
-            while (_remainingLoadedSamples < requiredNumberOfSamples)
+            while (RemainingLoadedSamples < requiredNumberOfSamples)
+            {
                 LoadNextChunk();
+                if (_currentChunkIdx == -1)
+                    return;
+            }
         }
 
         private void LoadNextChunk()
         {
-            var nextChunkId = NextChunkId();
+            var nextChunkId = RequestNextChunkId();
             var nextChunk = _deserializer.GetChunk(nextChunkId);
-            var numSamplesInChunk = nextChunk.Values.First().Count();
-            foreach (var sample in nextChunk)
+            foreach (var sampleStreamAndFeatureVector in nextChunk)
             {
-                foreach (var singleSample in sample.Value)
+                foreach (var sampleFeatureVector in sampleStreamAndFeatureVector.Value)
                 {
-                    _loadedSamples[sample.Key].Enqueue(singleSample);
-                    _remainingLoadedSamples++;
+                    _loadedSamples[sampleStreamAndFeatureVector.Key].Enqueue(sampleFeatureVector);
                 }   
             }
         }
 
-        private int NextChunkId()
+        private int RequestNextChunkId()
         {
-            if (_currentChunkId < _chunksRandomOrder.Length)
-                return _chunksRandomOrder[_currentChunkId++];
+            int nextChunkId;
 
-            if (_repeatInfinitely)
+            if (_currentChunkIdx < _chunksRandomOrder.Length - 1)
             {
-                // Restart
-                _currentChunkId = 0;
-                _chunksRandomOrder = GenerateRandomPermutation(_numberOfChunks);
+                nextChunkId = _chunksRandomOrder[_currentChunkIdx++];
+            }
+            else if (_repeatInfinitely)
+            {
+                InitializeNextEpoch(false);
+                nextChunkId = _chunksRandomOrder[_currentChunkIdx++];
             }
             else
             {
-                _currentChunkId = -1;
+                nextChunkId = _chunksRandomOrder[_currentChunkIdx];
+                _currentChunkIdx = -1;
             }
 
-            return _currentChunkId;
+            return nextChunkId;
         }
 
         private int[] GenerateRandomPermutation(int length)

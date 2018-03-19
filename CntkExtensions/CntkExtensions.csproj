@@ -32,10 +32,14 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="Castle.Core, Version=4.0.0.0, Culture=neutral, PublicKeyToken=407dd0808d44fbdc, processorArchitecture=MSIL">
+      <HintPath>..\packages\Castle.Core.4.2.1\lib\net45\Castle.Core.dll</HintPath>
+    </Reference>
     <Reference Include="Cntk.Core.Managed-2.4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=a82c1f3f67b62253, processorArchitecture=AMD64">
       <HintPath>..\packages\CNTK.GPU.2.4.0\lib\net45\x64\Cntk.Core.Managed-2.4.dll</HintPath>
     </Reference>
     <Reference Include="System" />
+    <Reference Include="System.Configuration" />
     <Reference Include="System.Core" />
     <Reference Include="System.Web" />
     <Reference Include="System.Xml.Linq" />
@@ -48,6 +52,7 @@
   <ItemGroup>
     <Compile Include="Assembly.cs" />
     <Compile Include="IO\Deserialization\IDeserializer.cs" />
+    <Compile Include="IO\NoMoreMinibatchesException.cs" />
     <Compile Include="IO\ExtendedStreamInformation.cs" />
     <Compile Include="IO\ExtendedMinibatchSource.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

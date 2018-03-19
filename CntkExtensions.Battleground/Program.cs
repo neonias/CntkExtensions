@@ -16,8 +16,6 @@ namespace CntkExtensions.Battleground
             var map = new UnorderedMapStreamInformationMinibatchData();
             map.Add(new StreamInformation(), new MinibatchData());
             Trainer t = null;
-            source.GetNextMinibatch()
-            Value.CreateBatchOfSequences<float>(new NDShape(new []{5, 5}), new )
         }
     }
 }
